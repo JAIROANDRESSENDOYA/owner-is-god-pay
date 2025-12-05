@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "apphosting": {
+    "backendId": "ownerisgodpay-core",
+    "rootDir": "/"
+  }
+}
+

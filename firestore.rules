@@ -3,46 +3,125 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper function to check if a user is authenticated
-    function isAuthenticated() {
+    // --- Funciones globales ---
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    // Helper function to check if the requesting user is the owner of the document
-    function isOwner(userId) {
+    function isOwner() {
+      return request.auth.token.role == 'owner';
+    }
+
+    function isAdmin() {
+      return request.auth.token.role == 'admin';
+    }
+
+    function isClient() {
+      return request.auth.token.role == 'client';
+    }
+
+    function isDocumentOwner(userId) {
       return request.auth.uid == userId;
     }
 
-    // Defines rules for the 'profiles' collection
-    match /profiles/{userId} {
-      // READ: A user can get their own document.
-      allow get: if isAuthenticated() && isOwner(userId);
-      
-      // LIST: No user should be able to list all profiles.
-      allow list: if false;
-      
-      // WRITE:
-      // - A user can only create or update their own profile.
-      allow write: if isAuthenticated() && isOwner(userId);
-      
-      // Deletion should be handled by a secure backend process.
-      allow delete: if false;
+    // --- USUARIOS ---
+    match /users/{userId} {
 
-      // Users can manage their own subcollections.
-      match /{subcollection}/{docId} {
-        allow read, write: if isAuthenticated() && isOwner(userId);
-      }
+      // Crear: cualquier usuario autenticado (sin exigir role)
+      allow create: if isSignedIn()
+                    && isDocumentOwner(userId);
+
+      // Leer: dueño, admin, owner
+      allow read: if isSignedIn()
+                   && (isDocumentOwner(userId) || isAdmin() || isOwner());
+
+      // Actualizar:
+      // - Clientes NO pueden tocar "role"
+      // - Admin y Owner sí pueden
+      allow update: if isSignedIn()
+                     && (
+                          // Dueño actualiza su información normal
+                          (isDocumentOwner(userId)
+                           && !("role" in request.resource.data))
+
+                          ||
+
+                          // Admin o Owner pueden editar todo
+                          isAdmin() || isOwner()
+                        );
+
+      // Eliminar: SOLO OWNER
+      allow delete: if isSignedIn() && isOwner();
     }
 
-    // Loan applications can be created by any authenticated user.
-    // Reading/updating/deleting should be restricted, likely to admins or the user who created it.
-    // For now, we allow any authenticated user to create.
-    match /loanApplications/{loanId} {
-      allow create: if isAuthenticated();
-      // Only the user who created the loan or an admin can read/update it.
-      // This assumes an 'admin' role is stored somewhere or checked via claims.
-      allow read, update: if isAuthenticated() && (resource.data.userId == request.auth.uid);
-      allow delete: if false; // Deletions should be handled carefully.
+
+    // --- CUENTAS BANCARIAS ---
+    match /accounts/{accountId} {
+
+      // Crear cuenta: SOLO Admin y Owner
+      allow create: if isSignedIn()
+                    && (isAdmin() || isOwner());
+
+      // Leer: dueño de la cuenta, admin, owner
+      allow read: if isSignedIn()
+                   && (resource.data.userId == request.auth.uid
+                       || isAdmin()
+                       || isOwner());
+
+      // Actualizar: admin, owner
+      allow update: if isSignedIn()
+                     && (isAdmin() || isOwner());
+
+      // Eliminar: SOLO owner
+      allow delete: if isSignedIn() && isOwner();
+    }
+
+
+    // --- TRANSACCIONES ---
+    match /transactions/{txId} {
+
+      // Crear: SOLO el servidor (via Cloud Function)
+      allow create: if false;
+
+      // Leer: dueño, admin, owner
+      allow read: if isSignedIn()
+                   && (resource.data.userId == request.auth.uid
+                       || isAdmin()
+                       || isOwner());
+
+      // Update: prohibido
+      allow update: if false;
+
+      // Delete: solo owner
+      allow delete: if isSignedIn() && isOwner();
+    }
+
+
+    // --- TARJETAS / WALLETS / RETIROS / PAGOS / LO DEMÁS ---
+    match /{colName}/{docId} {
+
+      // Crear: Admin + Owner
+      allow create: if isSignedIn()
+                    && (isAdmin() || isOwner());
+
+      // Leer: cualquier usuario autenticado
+      allow read: if isSignedIn();
+
+      // Actualizar:
+      // - Clientes no pueden agregar "role"
+      // - Admin / Owner pueden todo
+      allow update: if isSignedIn()
+                     && (
+                          isAdmin() || isOwner()
+                          || (
+                                isClient()
+                                && !("role" in request.resource.data)
+                             )
+                        );
+
+      // Eliminar: solo owner
+      allow delete: if isSignedIn() && isOwner();
     }
   }
 }
+
